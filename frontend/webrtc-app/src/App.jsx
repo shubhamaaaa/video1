@@ -13,8 +13,11 @@ const ws = new WebSocket('wss://video1-backend.onrender.com');
 function App() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const pcRef = useRef(null); // 👈 FIXED
+  const pcRef = useRef(null);
   const [targetId, setTargetId] = useState('');
+
+  const [remoteDescSet, setRemoteDescSet] = useState(false);
+  const iceCandidateQueue = useRef([]);
 
   useEffect(() => {
     ws.onopen = () => {
@@ -32,11 +35,17 @@ function App() {
           await pcRef.current?.setRemoteDescription(new RTCSessionDescription(payload));
           break;
         case 'ice':
-          await pcRef.current?.addIceCandidate(new RTCIceCandidate(payload));
+          if (remoteDescSet && pcRef.current) {
+            await pcRef.current.addIceCandidate(new RTCIceCandidate(payload));
+          } else {
+            iceCandidateQueue.current.push(payload); // Store ICE until ready
+          }
+          break;
+        default:
           break;
       }
     };
-  }, []);
+  }, [remoteDescSet]);
 
   const startCall = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -87,6 +96,13 @@ function App() {
     await peer.setLocalDescription(answer);
 
     ws.send(JSON.stringify({ type: 'answer', payload: answer, to: targetId }));
+
+    // ✅ Remote description is now set — apply any queued ICE candidates
+    setRemoteDescSet(true);
+    iceCandidateQueue.current.forEach(async (candidate) => {
+      await peer.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+    iceCandidateQueue.current = [];
   };
 
   return (
