@@ -8,7 +8,7 @@ const peerConnectionConfig = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
-const ws = new WebSocket('ws://localhost:3001');
+const ws = new WebSocket('wss://video1-backend.onrender.com');
 
 function App() {
   const localVideoRef = useRef(null);
