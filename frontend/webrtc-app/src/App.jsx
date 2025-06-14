@@ -1,0 +1,110 @@
+import { useEffect, useRef, useState } from 'react';
+import { v4 as uuidv4 } from 'uuid';
+
+const userId = window.location.hash.substring(1) || uuidv4();
+window.location.hash = userId;
+
+const peerConnectionConfig = {
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+};
+
+const ws = new WebSocket('ws://localhost:3001');
+
+function App() {
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const pcRef = useRef(null); // 👈 FIXED
+  const [targetId, setTargetId] = useState('');
+
+  useEffect(() => {
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'register', payload: { userId } }));
+    };
+
+    ws.onmessage = async (message) => {
+      const { type, payload } = JSON.parse(message.data);
+
+      switch (type) {
+        case 'offer':
+          await createAnswer(payload);
+          break;
+        case 'answer':
+          await pcRef.current?.setRemoteDescription(new RTCSessionDescription(payload));
+          break;
+        case 'ice':
+          await pcRef.current?.addIceCandidate(new RTCIceCandidate(payload));
+          break;
+      }
+    };
+  }, []);
+
+  const startCall = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localVideoRef.current.srcObject = stream;
+
+    const peer = new RTCPeerConnection(peerConnectionConfig);
+    pcRef.current = peer;
+
+    stream.getTracks().forEach(track => peer.addTrack(track, stream));
+
+    peer.ontrack = (e) => {
+      remoteVideoRef.current.srcObject = e.streams[0];
+    };
+
+    peer.onicecandidate = (e) => {
+      if (e.candidate) {
+        ws.send(JSON.stringify({ type: 'ice', payload: e.candidate, to: targetId }));
+      }
+    };
+
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+
+    ws.send(JSON.stringify({ type: 'offer', payload: offer, to: targetId }));
+  };
+
+  const createAnswer = async (offer) => {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localVideoRef.current.srcObject = stream;
+
+    const peer = new RTCPeerConnection(peerConnectionConfig);
+    pcRef.current = peer;
+
+    stream.getTracks().forEach(track => peer.addTrack(track, stream));
+
+    peer.ontrack = (e) => {
+      remoteVideoRef.current.srcObject = e.streams[0];
+    };
+
+    peer.onicecandidate = (e) => {
+      if (e.candidate) {
+        ws.send(JSON.stringify({ type: 'ice', payload: e.candidate, to: targetId }));
+      }
+    };
+
+    await peer.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await peer.createAnswer();
+    await peer.setLocalDescription(answer);
+
+    ws.send(JSON.stringify({ type: 'answer', payload: answer, to: targetId }));
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', padding: 20 }}>
+      <h1>WebRTC Video Call</h1>
+      <input
+        placeholder="Enter remote user ID"
+        value={targetId}
+        onChange={(e) => setTargetId(e.target.value)}
+      />
+      <button onClick={startCall}>Start Call</button>
+      <div style={{ display: 'flex', gap: 20, marginTop: 20 }}>
+        <video ref={localVideoRef} autoPlay playsInline muted width="300" />
+        <video ref={remoteVideoRef} autoPlay playsInline width="300" />
+      </div>
+      <p>Your ID: {userId}</p>
+    </div>
+  );
+}
+
+export default App;
