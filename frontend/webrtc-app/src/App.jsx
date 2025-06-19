@@ -15,8 +15,8 @@ function App() {
   const remoteVideoRef = useRef(null);
   const pcRef = useRef(null);
   const iceCandidateQueue = useRef([]);
+  const remoteDescSetRef = useRef(false);
   const [targetId, setTargetId] = useState('');
-  const [remoteDescSet, setRemoteDescSet] = useState(false);
   const [isCaller, setIsCaller] = useState(false);
 
   useEffect(() => {
@@ -25,30 +25,53 @@ function App() {
     };
 
     ws.onmessage = async (message) => {
-      const { type, payload } = JSON.parse(message.data);
+      const { type, payload, from } = JSON.parse(message.data);
 
       switch (type) {
         case 'offer':
           setIsCaller(false);
+          setTargetId(from);
           await handleOffer(payload);
           break;
+
         case 'answer':
-          if (!pcRef.current.currentRemoteDescription) {
+          if (pcRef.current && !pcRef.current.currentRemoteDescription) {
             await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload));
+            remoteDescSetRef.current = true;
+            flushIceQueue();
           }
           break;
+
         case 'ice':
-          if (remoteDescSet) {
-            await pcRef.current.addIceCandidate(new RTCIceCandidate(payload));
+          if (remoteDescSetRef.current && pcRef.current) {
+            try {
+              await pcRef.current.addIceCandidate(new RTCIceCandidate(payload));
+            } catch (e) {
+              console.warn('Failed to add ICE candidate:', e);
+            }
           } else {
             iceCandidateQueue.current.push(payload);
           }
           break;
+
         default:
           break;
       }
     };
-  }, [remoteDescSet]);
+  }, []);
+
+  const flushIceQueue = async () => {
+    if (pcRef.current) {
+      for (const candidate of iceCandidateQueue.current) {
+        try {
+          await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.warn('Error adding queued ICE candidate:', e);
+        }
+      }
+      iceCandidateQueue.current = [];
+    }
+  };
 
   const startCall = async () => {
     setIsCaller(true);
@@ -90,19 +113,14 @@ function App() {
     };
 
     peer.onicecandidate = (e) => {
-      if (e.candidate) {
+      if (e.candidate && targetId) {
         ws.send(JSON.stringify({ type: 'ice', payload: e.candidate, to: targetId }));
       }
     };
 
     await peer.setRemoteDescription(new RTCSessionDescription(offer));
-    setRemoteDescSet(true);
-
-    // Flush buffered ICE candidates
-    for (const candidate of iceCandidateQueue.current) {
-      await peer.addIceCandidate(new RTCIceCandidate(candidate));
-    }
-    iceCandidateQueue.current = [];
+    remoteDescSetRef.current = true;
+    await flushIceQueue();
 
     const answer = await peer.createAnswer();
     await peer.setLocalDescription(answer);
